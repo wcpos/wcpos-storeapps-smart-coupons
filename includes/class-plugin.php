@@ -23,6 +23,13 @@ class Plugin {
 	private static $instance = null;
 
 	/**
+	 * Order currently being rendered for a WCPOS receipt.
+	 *
+	 * @var WC_Order|null
+	 */
+	private $receipt_order = null;
+
+	/**
 	 * Get singleton instance.
 	 *
 	 * @return self
@@ -42,6 +49,11 @@ class Plugin {
 		add_action( 'init', array( $this, 'load_textdomain' ) );
 		add_action( 'woocommerce_order_after_calculate_totals', array( $this, 'capture_pos_order_contribution' ), 30, 2 );
 		add_action( 'woocommerce_order_status_changed', array( $this, 'add_store_credit_audit_note_after_status_change' ), 30, 4 );
+		add_action( 'woocommerce_pos_before_template_render', array( $this, 'set_receipt_order_context' ), 10, 2 );
+		add_action( 'woocommerce_pos_after_template_render', array( $this, 'clear_receipt_order_context' ) );
+		add_filter( 'rest_request_before_callbacks', array( $this, 'set_rest_receipt_order_context' ), 10, 3 );
+		add_filter( 'rest_request_after_callbacks', array( $this, 'clear_rest_receipt_order_context' ), 10, 3 );
+		add_filter( 'woocommerce_coupon_get_description', array( $this, 'append_store_credit_receipt_label' ), 10, 2 );
 	}
 
 	/**
@@ -196,6 +208,132 @@ class Plugin {
 			array(
 				'currency' => $order->get_currency(),
 			)
+		);
+	}
+
+	/**
+	 * Set receipt context while WCPOS renders a server-side receipt template.
+	 *
+	 * @param int      $order_id Order ID.
+	 * @param WC_Order $order    Order object.
+	 */
+	public function set_receipt_order_context( $order_id, $order ): void {
+		if ( $order instanceof WC_Order ) {
+			$this->receipt_order = $order;
+			return;
+		}
+
+		$order               = wc_get_order( $order_id );
+		$this->receipt_order = $order instanceof WC_Order ? $order : null;
+	}
+
+	/**
+	 * Clear receipt context after WCPOS renders a server-side receipt template.
+	 */
+	public function clear_receipt_order_context(): void {
+		$this->receipt_order = null;
+	}
+
+	/**
+	 * Set receipt context while WCPOS REST receipt data is being built.
+	 *
+	 * @param mixed            $response Current REST response.
+	 * @param array            $handler  Route handler.
+	 * @param \WP_REST_Request $request  REST request.
+	 * @return mixed
+	 */
+	public function set_rest_receipt_order_context( $response, $handler, $request ) {
+		unset( $handler );
+
+		if ( ! $request instanceof \WP_REST_Request || 0 !== strpos( $request->get_route(), '/wcpos/v1/receipts/' ) ) {
+			return $response;
+		}
+
+		$order_id = (int) $request->get_param( 'order_id' );
+		if ( ! $order_id ) {
+			$order_id = (int) $request->get_param( 'id' );
+		}
+
+		$order               = $order_id ? wc_get_order( $order_id ) : null;
+		$this->receipt_order = $order instanceof WC_Order ? $order : null;
+
+		return $response;
+	}
+
+	/**
+	 * Clear receipt context after WCPOS REST receipt data is built.
+	 *
+	 * @param mixed            $response Current REST response.
+	 * @param array            $handler  Route handler.
+	 * @param \WP_REST_Request $request  REST request.
+	 * @return mixed
+	 */
+	public function clear_rest_receipt_order_context( $response, $handler, $request ) {
+		unset( $handler );
+
+		if ( $request instanceof \WP_REST_Request && 0 === strpos( $request->get_route(), '/wcpos/v1/receipts/' ) ) {
+			$this->receipt_order = null;
+		}
+
+		return $response;
+	}
+
+	/**
+	 * Append StoreApps store-credit balance text to coupon descriptions during WCPOS receipt rendering.
+	 *
+	 * WCPOS receipt templates already render coupon descriptions in the discount
+	 * label. This keeps the integration inside the existing coupon/discount
+	 * framework instead of adding receipt-template-specific data.
+	 *
+	 * @param string    $description Coupon description.
+	 * @param WC_Coupon $coupon      Coupon object.
+	 * @return string
+	 */
+	public function append_store_credit_receipt_label( $description, $coupon ): string {
+		if ( ! $this->receipt_order instanceof WC_Order || ! $coupon instanceof WC_Coupon ) {
+			return (string) $description;
+		}
+
+		if ( ! $this->is_pos_order( $this->receipt_order ) || ! $this->is_storeapps_available() || ! $this->is_store_credit_coupon( $coupon ) ) {
+			return (string) $description;
+		}
+
+		$contribution = $this->receipt_order->get_meta( 'smart_coupons_contribution', true );
+		if ( empty( $contribution ) || ! is_array( $contribution ) ) {
+			return (string) $description;
+		}
+
+		$code = wc_format_coupon_code( $coupon->get_code() );
+		if ( ! array_key_exists( $code, $contribution ) ) {
+			return (string) $description;
+		}
+
+		$balance_label = sprintf(
+			/* translators: %s: current store-credit balance */
+			__( 'Store credit balance: %s', 'wcpos-storeapps-smart-coupons' ),
+			$this->format_order_price_plain( $this->receipt_order, (float) $coupon->get_amount() )
+		);
+
+		$description = trim( wp_strip_all_tags( (string) $description ) );
+		if ( '' !== $description && false !== strpos( $description, $balance_label ) ) {
+			return $description;
+		}
+
+		return '' === $description ? $balance_label : $description . ' — ' . $balance_label;
+	}
+
+	/**
+	 * Format an amount for text-only receipt labels.
+	 *
+	 * @param WC_Order $order  Order object.
+	 * @param float    $amount Amount.
+	 * @return string
+	 */
+	private function format_order_price_plain( WC_Order $order, float $amount ): string {
+		return html_entity_decode(
+			wp_strip_all_tags( $this->format_order_price( $order, $amount ) ),
+			ENT_QUOTES | ENT_SUBSTITUTE,
+			'UTF-8'
 		);
 	}
 

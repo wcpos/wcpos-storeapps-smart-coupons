@@ -15,11 +15,14 @@ add_filter(
 );
 
 class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
-	private function create_store_credit_coupon( string $code, string $amount, string $original_amount = '' ): WC_Coupon {
+	private function create_store_credit_coupon( string $code, string $amount, string $original_amount = '', string $description = '' ): WC_Coupon {
 		$coupon = new WC_Coupon();
 		$coupon->set_code( $code );
 		$coupon->set_discount_type( 'smart_coupon' );
 		$coupon->set_amount( $amount );
+		if ( '' !== $description ) {
+			$coupon->set_description( $description );
+		}
 		if ( '' !== $original_amount ) {
 			$coupon->update_meta_data( 'wc_sc_original_amount', $original_amount );
 		}
@@ -29,7 +32,7 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 	}
 
 	public function test_pos_order_coupon_lines_create_smart_coupons_contribution_meta(): void {
-		$this->create_store_credit_coupon( 'STORE100', '100' );
+		$coupon = $this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
 
 		$order = new WC_Order();
 		$order->set_created_via( 'woocommerce-pos' );
@@ -57,5 +60,19 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'StoreApps Smart Coupons store credit recorded for WCPOS', $notes[0]->content );
 		$this->assertStringContainsString( 'store100', $notes[0]->content );
 		$this->assertStringContainsString( '35', $notes[0]->content );
+
+		$coupon->set_amount( '65' );
+		$coupon->save();
+
+		Plugin::instance()->set_receipt_order_context( $order->get_id(), $order );
+		try {
+			$receipt_coupon_description = ( new WC_Coupon( 'STORE100' ) )->get_description();
+		} finally {
+			Plugin::instance()->clear_receipt_order_context();
+		}
+
+		$this->assertStringContainsString( 'Gift card', $receipt_coupon_description );
+		$this->assertStringContainsString( 'Store credit balance:', $receipt_coupon_description );
+		$this->assertStringContainsString( '65', $receipt_coupon_description );
 	}
 }

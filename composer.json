@@ -1,0 +1,28 @@
+{
+  "name": "wcpos/wcpos-storeapps-smart-coupons",
+  "description": "StoreApps Smart Coupons compatibility for WCPOS",
+  "type": "wordpress-plugin",
+  "license": "GPL-3.0+",
+  "require": {
+    "php": ">=7.4"
+  },
+  "require-dev": {
+    "wp-phpunit/wp-phpunit": "6.9.4",
+    "yoast/phpunit-polyfills": "4.0.0",
+    "squizlabs/php_codesniffer": "^3.13",
+    "wp-coding-standards/wpcs": "^3.3"
+  },
+  "scripts": {
+    "lint": "phpcs --standard=WordPress-Extra wcpos-storeapps-smart-coupons.php includes tests",
+    "test": "vendor/bin/phpunit -c phpunit.xml.dist"
+  },
+  "config": {
+    "platform": {
+      "php": "7.4"
+    },
+    "platform-check": false,
+    "allow-plugins": {
+      "dealerdirect/phpcodesniffer-composer-installer": true
+    }
+  }
+}

@@ -10,8 +10,6 @@ namespace WCPOS\StoreAppsSmartCoupons;
 use WC_Coupon;
 use WC_Order;
 use WC_Order_Item_Coupon;
-use WP_REST_Request;
-use WP_REST_Response;
 
 /**
  * StoreApps Smart Coupons compatibility hooks for WCPOS.
@@ -42,7 +40,6 @@ class Plugin {
 	 */
 	private function __construct() {
 		add_action( 'init', array( $this, 'load_textdomain' ) );
-		add_filter( 'woocommerce_rest_prepare_shop_coupon_object', array( $this, 'add_store_credit_fields' ), 20, 3 );
 		add_action( 'woocommerce_order_after_calculate_totals', array( $this, 'capture_pos_order_contribution' ), 30, 2 );
 	}
 
@@ -51,38 +48,6 @@ class Plugin {
 	 */
 	public function load_textdomain(): void {
 		load_plugin_textdomain( 'wcpos-storeapps-smart-coupons', false, dirname( plugin_basename( dirname( __DIR__ ) . '/wcpos-storeapps-smart-coupons.php' ) ) . '/languages' );
-	}
-
-	/**
-	 * Add StoreApps store-credit metadata to WCPOS coupon responses.
-	 *
-	 * @param WP_REST_Response $response Coupon response.
-	 * @param WC_Coupon        $coupon   Coupon object.
-	 * @param WP_REST_Request  $request  REST request.
-	 * @return WP_REST_Response
-	 */
-	public function add_store_credit_fields( WP_REST_Response $response, WC_Coupon $coupon, WP_REST_Request $request ): WP_REST_Response {
-		if ( ! $this->is_wcpos_request( $request ) ) {
-			return $response;
-		}
-
-		if ( ! $this->is_storeapps_available() || ! $this->is_store_credit_coupon( $coupon ) ) {
-			return $response;
-		}
-
-		$data = $response->get_data();
-		if ( ! is_array( $data ) ) {
-			$data = array();
-		}
-
-		$data['wcpos_storeapps_smart_coupon'] = array(
-			'is_store_credit' => true,
-			'balance'         => wc_format_decimal( $this->get_coupon_amount( $coupon ) ),
-			'original_amount' => wc_format_decimal( $this->get_coupon_original_amount( $coupon ) ),
-		);
-
-		$response->set_data( $data );
-		return $response;
 	}
 
 	/**
@@ -156,16 +121,6 @@ class Plugin {
 	}
 
 	/**
-	 * Check whether request is for WCPOS REST namespace.
-	 *
-	 * @param WP_REST_Request $request REST request.
-	 * @return bool
-	 */
-	private function is_wcpos_request( WP_REST_Request $request ): bool {
-		return 0 === strpos( $request->get_route(), '/wcpos/v1/' );
-	}
-
-	/**
 	 * Check whether StoreApps Smart Coupons is active enough to expose behavior.
 	 *
 	 * @return bool
@@ -182,37 +137,6 @@ class Plugin {
 	 */
 	private function is_store_credit_coupon( WC_Coupon $coupon ): bool {
 		return is_callable( array( $coupon, 'is_type' ) ) && $coupon->is_type( 'smart_coupon' );
-	}
-
-	/**
-	 * Get current coupon balance.
-	 *
-	 * @param WC_Coupon $coupon Coupon object.
-	 * @return float
-	 */
-	private function get_coupon_amount( WC_Coupon $coupon ): float {
-		global $woocommerce_smart_coupon;
-
-		if ( is_object( $woocommerce_smart_coupon ) && is_callable( array( $woocommerce_smart_coupon, 'get_amount' ) ) ) {
-			return (float) $woocommerce_smart_coupon->get_amount( $coupon );
-		}
-
-		return (float) $coupon->get_amount();
-	}
-
-	/**
-	 * Get original coupon amount when StoreApps has recorded it.
-	 *
-	 * @param WC_Coupon $coupon Coupon object.
-	 * @return float
-	 */
-	private function get_coupon_original_amount( WC_Coupon $coupon ): float {
-		$original_amount = $coupon->get_meta( 'wc_sc_original_amount', true );
-		if ( '' !== $original_amount && null !== $original_amount ) {
-			return (float) $original_amount;
-		}
-
-		return $this->get_coupon_amount( $coupon );
 	}
 
 	/**

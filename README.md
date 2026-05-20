@@ -8,9 +8,8 @@ This extension targets **Smart Coupons for WooCommerce by StoreApps / WooCommerc
 
 Current compatibility layer:
 
-- exposes StoreApps store-credit metadata on WCPOS coupon REST responses;
 - captures `smart_coupons_contribution` order meta for POS REST orders so StoreApps can deduct the correct partial store-credit amount from gift-card balances;
-- preserves normal WooCommerce coupons unchanged.
+- preserves normal WooCommerce coupon REST responses and relies on StoreApps/WooCommerce coupon metadata instead of adding WCPOS-specific coupon fields.
 
 ## Development
 

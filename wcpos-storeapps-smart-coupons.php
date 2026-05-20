@@ -5,7 +5,7 @@
  * Version: 0.1.0
  * Author: kilbot
  * Update URI: https://github.com/wcpos/wcpos-storeapps-smart-coupons
- * Requires Plugins: woocommerce, woocommerce-pos, woocommerce-smart-coupons
+ * Requires Plugins: woocommerce
  * Text Domain: wcpos-storeapps-smart-coupons
  */
 

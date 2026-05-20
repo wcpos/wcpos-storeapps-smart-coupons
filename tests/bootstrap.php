@@ -9,19 +9,6 @@ if ( ! $_tests_dir ) {
 }
 
 
-if ( ! defined( 'WP_TESTS_DOMAIN' ) ) {
-	define( 'WP_TESTS_DOMAIN', 'example.org' );
-}
-if ( ! defined( 'WP_TESTS_EMAIL' ) ) {
-	define( 'WP_TESTS_EMAIL', 'admin@example.org' );
-}
-if ( ! defined( 'WP_TESTS_TITLE' ) ) {
-	define( 'WP_TESTS_TITLE', 'WCPOS StoreApps Smart Coupons Tests' );
-}
-if ( ! defined( 'WP_PHP_BINARY' ) ) {
-	define( 'WP_PHP_BINARY', PHP_BINARY );
-}
-
 require_once $_tests_dir . '/includes/functions.php';
 
 $polyfills_path = dirname( __DIR__ ) . '/vendor/yoast/phpunit-polyfills/phpunitpolyfills-autoload.php';
@@ -36,6 +23,7 @@ tests_add_filter(
 
 		$plugins = array(
 			$plugin_dir . '/../woocommerce/woocommerce.php',
+			$plugin_dir . '/../woocommerce-smart-coupons/woocommerce-smart-coupons.php',
 			$plugin_dir . '/../woocommerce-pos/woocommerce-pos.php',
 			$plugin_dir . '/../woocommerce-pos-pro/woocommerce-pos-pro.php',
 			$plugin_dir . '/wcpos-storeapps-smart-coupons.php',

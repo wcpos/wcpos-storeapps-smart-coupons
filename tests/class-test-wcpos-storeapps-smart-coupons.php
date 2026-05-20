@@ -6,24 +6,26 @@ if ( ! defined( 'WC_SC_PLUGIN_FILE' ) ) {
 	define( 'WC_SC_PLUGIN_FILE', __FILE__ );
 }
 
+add_filter(
+	'woocommerce_coupon_discount_types',
+	static function ( array $discount_types ): array {
+		$discount_types['smart_coupon'] = 'Store Credit';
+		return $discount_types;
+	}
+);
+
 class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 	private function create_store_credit_coupon( string $code, string $amount, string $original_amount = '' ): WC_Coupon {
-		$post_id = wp_insert_post(
-			array(
-				'post_title'  => $code,
-				'post_name'   => $code,
-				'post_status' => 'publish',
-				'post_type'   => 'shop_coupon',
-			)
-		);
-
-		update_post_meta( $post_id, 'discount_type', 'smart_coupon' );
-		update_post_meta( $post_id, 'coupon_amount', $amount );
+		$coupon = new WC_Coupon();
+		$coupon->set_code( $code );
+		$coupon->set_discount_type( 'smart_coupon' );
+		$coupon->set_amount( $amount );
 		if ( '' !== $original_amount ) {
-			update_post_meta( $post_id, 'wc_sc_original_amount', $original_amount );
+			$coupon->update_meta_data( 'wc_sc_original_amount', $original_amount );
 		}
+		$coupon->save();
 
-		return new WC_Coupon( $post_id );
+		return $coupon;
 	}
 
 	public function test_coupon_response_marks_storeapps_store_credit(): void {

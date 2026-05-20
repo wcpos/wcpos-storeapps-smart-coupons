@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@accd6127cb78bee3e8082180cb391013d204ef9f # v2
+        with:
+          php-version: '8.2'
+          tools: composer
+
+      - name: Check if version has changed
+        id: check_version
+        run: |
+          VERSION=$(grep -oP "Version:\s*\K\d+(\.\d+)*" wcpos-storeapps-smart-coupons.php | head -n 1)
+          if [ -z "$VERSION" ]; then
+            echo "Could not find plugin version in wcpos-storeapps-smart-coupons.php"
+            exit 1
+          fi
+
+          git fetch --tags --force
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if git tag --list "v$VERSION" | grep -q .; then
+            echo "Version has not changed. Skipping release..."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version has changed. Creating new release..."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install composer dependencies
+        if: steps.check_version.outputs.release == 'true'
+        run: composer install --no-dev --optimize-autoloader
+
+      - name: Build ZIP
+        if: steps.check_version.outputs.release == 'true'
+        run: |
+          rm -rf dist wcpos-storeapps-smart-coupons.zip
+          mkdir -p dist/wcpos-storeapps-smart-coupons
+
+          rsync -a ./ dist/wcpos-storeapps-smart-coupons/ \
+            --exclude '.git*' \
+            --exclude '.github/' \
+            --exclude 'node_modules/' \
+            --exclude 'tests/' \
+            --exclude 'vendor/' \
+            --exclude '.wp-env.json' \
+            --exclude '.wp-env.override.json' \
+            --exclude 'phpunit.xml.dist' \
+            --exclude '.phpunit.result.cache' \
+            --exclude 'composer.json' \
+            --exclude 'composer.lock' \
+            --exclude 'package.json' \
+            --exclude 'pnpm-lock.yaml' \
+            --exclude 'pnpm-workspace.yaml' \
+            --exclude 'dist/'
+
+          cd dist
+          zip -r ../wcpos-storeapps-smart-coupons.zip wcpos-storeapps-smart-coupons
+
+      - name: Create release and upload ZIP
+        if: steps.check_version.outputs.release == 'true'
+        run: |
+          gh release create "v${{ steps.check_version.outputs.version }}" \
+            wcpos-storeapps-smart-coupons.zip \
+            --title "Release v${{ steps.check_version.outputs.version }}" \
+            --notes "Automated release for version ${{ steps.check_version.outputs.version }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

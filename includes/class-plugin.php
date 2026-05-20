@@ -41,6 +41,7 @@ class Plugin {
 	private function __construct() {
 		add_action( 'init', array( $this, 'load_textdomain' ) );
 		add_action( 'woocommerce_order_after_calculate_totals', array( $this, 'capture_pos_order_contribution' ), 30, 2 );
+		add_action( 'woocommerce_order_status_changed', array( $this, 'add_store_credit_audit_note_after_status_change' ), 30, 4 );
 	}
 
 	/**
@@ -103,7 +104,8 @@ class Plugin {
 				continue;
 			}
 
-			$contribution[ wc_format_coupon_code( $code ) ] = (float) wc_format_decimal( $used );
+			$formatted_code                  = wc_format_coupon_code( $code );
+			$contribution[ $formatted_code ] = (float) wc_format_decimal( $used );
 		}
 
 		if ( empty( $contribution ) ) {
@@ -116,6 +118,83 @@ class Plugin {
 			array(
 				'sc_version'       => $this->get_storeapps_version(),
 				'apply_before_tax' => get_option( 'woocommerce_smart_coupon_apply_before_tax', 'no' ),
+			)
+		);
+	}
+
+	/**
+	 * Add a private order note after StoreApps has processed a POS store-credit status change.
+	 *
+	 * @param int      $order_id   Order ID.
+	 * @param string   $old_status Previous order status.
+	 * @param string   $new_status New order status.
+	 * @param WC_Order $order      Order object.
+	 */
+	public function add_store_credit_audit_note_after_status_change( $order_id, $old_status, $new_status, $order ): void {
+		if ( ! $order instanceof WC_Order ) {
+			$order = wc_get_order( $order_id );
+		}
+
+		if ( ! $order instanceof WC_Order || ! $this->is_pos_order( $order ) || ! $this->is_storeapps_available() ) {
+			return;
+		}
+
+		if ( ! in_array( $new_status, array( 'processing', 'completed', 'on-hold' ), true ) ) {
+			return;
+		}
+
+		if ( 'yes' === $order->get_meta( '_wcpos_storeapps_smart_coupons_audit_note_added', true ) ) {
+			return;
+		}
+
+		$contribution = $order->get_meta( 'smart_coupons_contribution', true );
+		if ( empty( $contribution ) || ! is_array( $contribution ) ) {
+			return;
+		}
+
+		$lines = array();
+		foreach ( $contribution as $code => $used ) {
+			$coupon = new WC_Coupon( $code );
+			if ( ! $this->is_store_credit_coupon( $coupon ) ) {
+				continue;
+			}
+
+			$lines[] = sprintf(
+				/* translators: 1: coupon code, 2: used amount, 3: current coupon balance */
+				__( 'Coupon %1$s used %2$s. Current balance: %3$s.', 'wcpos-storeapps-smart-coupons' ),
+				'<code>' . esc_html( wc_format_coupon_code( $code ) ) . '</code>',
+				'<strong>' . wp_kses_post( $this->format_order_price( $order, (float) $used ) ) . '</strong>',
+				wp_kses_post( $this->format_order_price( $order, (float) $coupon->get_amount() ) )
+			);
+		}
+
+		if ( empty( $lines ) ) {
+			return;
+		}
+
+		$order->add_order_note(
+			sprintf(
+				/* translators: %s: store-credit audit lines */
+				__( 'StoreApps Smart Coupons store credit recorded for WCPOS: %s', 'wcpos-storeapps-smart-coupons' ),
+				implode( ' ', $lines )
+			)
+		);
+		$order->update_meta_data( '_wcpos_storeapps_smart_coupons_audit_note_added', 'yes' );
+		$order->save_meta_data();
+	}
+
+	/**
+	 * Format an amount using the order currency.
+	 *
+	 * @param WC_Order $order  Order object.
+	 * @param float    $amount Amount.
+	 * @return string
+	 */
+	private function format_order_price( WC_Order $order, float $amount ): string {
+		return wc_price(
+			$amount,
+			array(
+				'currency' => $order->get_currency(),
 			)
 		);
 	}

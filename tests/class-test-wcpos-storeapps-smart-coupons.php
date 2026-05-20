@@ -33,6 +33,7 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 
 		$order = new WC_Order();
 		$order->set_created_via( 'woocommerce-pos' );
+		$order->save();
 
 		$item = new WC_Order_Item_Coupon();
 		$item->set_code( 'STORE100' );
@@ -47,5 +48,14 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 			$order->get_meta( 'smart_coupons_contribution' )
 		);
 		$this->assertEquals( 'no', $order->get_meta( 'wc_sc_environment' )['apply_before_tax'] );
+
+		$order->save();
+		Plugin::instance()->add_store_credit_audit_note_after_status_change( $order->get_id(), 'pending', 'completed', $order );
+
+		$notes = wc_get_order_notes( array( 'order_id' => $order->get_id() ) );
+		$this->assertCount( 1, $notes );
+		$this->assertStringContainsString( 'StoreApps Smart Coupons store credit recorded for WCPOS', $notes[0]->content );
+		$this->assertStringContainsString( 'store100', $notes[0]->content );
+		$this->assertStringContainsString( '35', $notes[0]->content );
 	}
 }

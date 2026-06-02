@@ -91,7 +91,8 @@ class Plugin {
 			return;
 		}
 
-		$contribution = array();
+		$contribution       = array();
+		$smart_coupon_items = array();
 		foreach ( $order->get_items( 'coupon' ) as $coupon_item ) {
 			if ( ! $coupon_item instanceof WC_Order_Item_Coupon ) {
 				continue;
@@ -107,9 +108,14 @@ class Plugin {
 				continue;
 			}
 
-			$used = (float) $coupon_item->get_discount();
+			$smart_coupon_items[] = $coupon_item;
+			$used                 = abs( (float) $coupon_item->get_discount() );
 			if ( $this->store_credit_includes_tax( $order ) ) {
-				$used += (float) $coupon_item->get_discount_tax();
+				$used += abs( (float) $coupon_item->get_discount_tax() );
+			}
+
+			if ( $used <= 0 ) {
+				$used = $this->infer_single_store_credit_usage( $order, $coupon, $smart_coupon_items );
 			}
 
 			if ( $used <= 0 ) {
@@ -132,6 +138,179 @@ class Plugin {
 				'apply_before_tax' => get_option( 'woocommerce_smart_coupon_apply_before_tax', 'no' ),
 			)
 		);
+	}
+
+	/**
+	 * Infer usage for POS payloads that include a smart-coupon line but no line discount.
+	 *
+	 * Some POS order payloads carry coupon discounts as zero or signed values even
+	 * when the order value was paid by store credit. StoreApps requires a positive
+	 * smart_coupons_contribution amount. Only infer a zero line when there is a
+	 * single smart-coupon line, because splitting an order-level discount across
+	 * multiple store-credit coupons would be guesswork.
+	 *
+	 * @param WC_Order              $order              Order object.
+	 * @param WC_Coupon             $coupon             Store credit coupon.
+	 * @param WC_Order_Item_Coupon[] $smart_coupon_items Smart coupon lines seen so far.
+	 * @return float
+	 */
+	private function infer_single_store_credit_usage( WC_Order $order, WC_Coupon $coupon, array $smart_coupon_items ): float {
+		if ( 1 !== count( $smart_coupon_items ) || $this->order_has_multiple_store_credit_coupons( $order ) ) {
+			return 0.0;
+		}
+
+		if ( $this->order_has_ambiguous_zero_value_non_store_credit_coupon( $order ) ) {
+			return 0.0;
+		}
+
+		$non_store_credit_usage = $this->get_non_store_credit_coupon_usage( $order );
+		$used                   = abs( (float) $order->get_discount_total() );
+		if ( $this->store_credit_includes_tax( $order ) ) {
+			$used += abs( (float) $order->get_discount_tax() );
+		}
+		$used -= $non_store_credit_usage;
+
+		if ( $used <= 0 ) {
+			$used = $this->infer_store_credit_usage_from_reduced_order_total( $order ) - $non_store_credit_usage;
+		}
+
+		if ( $used <= 0 ) {
+			return 0.0;
+		}
+
+		return min( $used, abs( (float) $coupon->get_amount() ) );
+	}
+
+	/**
+	 * Check if the order has more than one StoreApps store-credit coupon line.
+	 *
+	 * @param WC_Order $order Order object.
+	 * @return bool
+	 */
+	private function order_has_multiple_store_credit_coupons( WC_Order $order ): bool {
+		$count = 0;
+
+		foreach ( $order->get_items( 'coupon' ) as $coupon_item ) {
+			if ( ! $coupon_item instanceof WC_Order_Item_Coupon ) {
+				continue;
+			}
+
+			$coupon = new WC_Coupon( $coupon_item->get_code() );
+			if ( $this->is_store_credit_coupon( $coupon ) ) {
+				++$count;
+			}
+
+			if ( $count > 1 ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Check whether a non-store-credit coupon line has hidden discount usage.
+	 *
+	 * POS payloads can include zero-value coupons such as free-shipping codes
+	 * alongside the store-credit coupon. Those are not ambiguous when the coupon
+	 * has no monetary amount; order-level discount totals can still be attributed
+	 * to the single store-credit line. A zero line for a monetary coupon is
+	 * ambiguous because the order-level discount could include that coupon's
+	 * hidden usage.
+	 *
+	 * @param WC_Order $order Order object.
+	 * @return bool
+	 */
+	private function order_has_ambiguous_zero_value_non_store_credit_coupon( WC_Order $order ): bool {
+		foreach ( $order->get_items( 'coupon' ) as $coupon_item ) {
+			if ( ! $coupon_item instanceof WC_Order_Item_Coupon ) {
+				continue;
+			}
+
+			$coupon = new WC_Coupon( $coupon_item->get_code() );
+			if ( $this->is_store_credit_coupon( $coupon ) ) {
+				continue;
+			}
+
+			$used = abs( (float) $coupon_item->get_discount() );
+			if ( $this->store_credit_includes_tax( $order ) ) {
+				$used += abs( (float) $coupon_item->get_discount_tax() );
+			}
+
+			if ( $used <= 0 && abs( (float) $coupon->get_amount() ) > 0 ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Get coupon usage already attributable to non-store-credit coupon lines.
+	 *
+	 * @param WC_Order $order Order object.
+	 * @return float
+	 */
+	private function get_non_store_credit_coupon_usage( WC_Order $order ): float {
+		$used = 0.0;
+
+		foreach ( $order->get_items( 'coupon' ) as $coupon_item ) {
+			if ( ! $coupon_item instanceof WC_Order_Item_Coupon ) {
+				continue;
+			}
+
+			$coupon = new WC_Coupon( $coupon_item->get_code() );
+			if ( $this->is_store_credit_coupon( $coupon ) ) {
+				continue;
+			}
+
+			$used += abs( (float) $coupon_item->get_discount() );
+			if ( $this->store_credit_includes_tax( $order ) ) {
+				$used += abs( (float) $coupon_item->get_discount_tax() );
+			}
+		}
+
+		return $used;
+	}
+
+	/**
+	 * Infer store credit usage from an order total already reduced by coupons.
+	 *
+	 * @param WC_Order $order Order object.
+	 * @return float
+	 */
+	private function infer_store_credit_usage_from_reduced_order_total( WC_Order $order ): float {
+		$pre_coupon_total = 0.0;
+
+		foreach ( $order->get_items( 'line_item' ) as $item ) {
+			$pre_coupon_total += abs( (float) $item->get_subtotal() );
+			if ( $this->store_credit_includes_tax( $order ) ) {
+				$pre_coupon_total += abs( (float) $item->get_subtotal_tax() );
+			}
+		}
+
+		foreach ( $order->get_items( 'shipping' ) as $item ) {
+			$pre_coupon_total += abs( (float) $item->get_total() );
+			if ( $this->store_credit_includes_tax( $order ) ) {
+				$pre_coupon_total += abs( (float) $item->get_total_tax() );
+			}
+		}
+
+		foreach ( $order->get_items( 'fee' ) as $item ) {
+			$pre_coupon_total += (float) $item->get_total();
+			if ( $this->store_credit_includes_tax( $order ) ) {
+				$pre_coupon_total += (float) $item->get_total_tax();
+			}
+		}
+
+		$remaining_total = abs( (float) $order->get_total() );
+		if ( ! $this->store_credit_includes_tax( $order ) ) {
+			$remaining_total -= abs( (float) $order->get_total_tax() );
+		}
+
+		$used = $pre_coupon_total - $remaining_total;
+
+		return $used > 0 ? $used : 0.0;
 	}
 
 	/**

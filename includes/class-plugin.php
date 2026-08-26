@@ -30,6 +30,13 @@ class Plugin {
 	private $receipt_order = null;
 
 	/**
+	 * Whether the StoreApps order-context gate is currently forced open.
+	 *
+	 * @var bool
+	 */
+	private $storeapps_gate_open = false;
+
+	/**
 	 * Get singleton instance.
 	 *
 	 * @return self
@@ -47,7 +54,10 @@ class Plugin {
 	 */
 	private function __construct() {
 		add_action( 'init', array( $this, 'load_textdomain' ) );
+		add_action( 'woocommerce_order_before_calculate_totals', array( $this, 'open_storeapps_order_context_gate' ), 5, 2 );
+		add_action( 'woocommerce_order_after_calculate_totals', array( $this, 'prune_removed_coupon_contributions' ), 25, 2 );
 		add_action( 'woocommerce_order_after_calculate_totals', array( $this, 'capture_pos_order_contribution' ), 30, 2 );
+		add_action( 'woocommerce_order_after_calculate_totals', array( $this, 'close_storeapps_order_context_gate' ), 999 );
 		add_action( 'woocommerce_order_status_changed', array( $this, 'add_store_credit_audit_note_after_status_change' ), 30, 4 );
 		add_action( 'woocommerce_pos_before_template_render', array( $this, 'set_receipt_order_context' ), 10, 2 );
 		add_action( 'woocommerce_pos_after_template_render', array( $this, 'clear_receipt_order_context' ) );
@@ -61,6 +71,147 @@ class Plugin {
 	 */
 	public function load_textdomain(): void {
 		load_plugin_textdomain( 'wcpos-storeapps-smart-coupons', false, dirname( plugin_basename( dirname( __DIR__ ) . '/wcpos-storeapps-smart-coupons.php' ) ) . '/languages' );
+	}
+
+	/**
+	 * Force StoreApps' order-context store-credit logic to run for POS order recalculations.
+	 *
+	 * StoreApps only applies `smart_coupon` store credit to an order when the
+	 * request is a wp-admin order-edit AJAX action, a WooCommerce REST API
+	 * request, or a `store-api` order. The WCPOS checkout coupon form is a
+	 * plain front-end POST handled via WC_Order::apply_coupon(), so none of
+	 * those gates open and the gift card validates but discounts nothing.
+	 * While a POS order carrying a store-credit coupon recalculates totals,
+	 * report a REST context so StoreApps' own discount logic runs.
+	 *
+	 * @param bool     $and_taxes Whether taxes are (re)calculated.
+	 * @param WC_Order $order     Order object.
+	 */
+	public function open_storeapps_order_context_gate( $and_taxes, $order ): void {
+		unset( $and_taxes );
+
+		if ( $this->storeapps_gate_open || ! $order instanceof WC_Order ) {
+			return;
+		}
+
+		if ( ! $this->is_pos_order( $order ) || ! $this->is_storeapps_available() ) {
+			return;
+		}
+
+		if ( ! \function_exists( 'WC' ) || ! is_callable( array( WC(), 'is_rest_api_request' ) ) ) {
+			return;
+		}
+
+		// Contexts StoreApps already handles on its own.
+		if ( WC()->is_rest_api_request() ) {
+			return;
+		}
+
+		// Never rewrite store-credit usage on an order that has been paid.
+		if ( $order->is_paid() ) {
+			return;
+		}
+
+		if ( ! $this->order_has_store_credit_coupon( $order ) ) {
+			return;
+		}
+
+		add_filter( 'woocommerce_is_rest_api_request', array( $this, 'force_rest_api_request_context' ), 100 );
+		$this->storeapps_gate_open = true;
+	}
+
+	/**
+	 * Stop reporting a REST context once the POS order recalculation finishes.
+	 */
+	public function close_storeapps_order_context_gate(): void {
+		if ( ! $this->storeapps_gate_open ) {
+			return;
+		}
+
+		remove_filter( 'woocommerce_is_rest_api_request', array( $this, 'force_rest_api_request_context' ), 100 );
+		$this->storeapps_gate_open = false;
+	}
+
+	/**
+	 * Filter callback used while the StoreApps order-context gate is open.
+	 *
+	 * @return bool
+	 */
+	public function force_rest_api_request_context(): bool {
+		return true;
+	}
+
+	/**
+	 * Drop smart_coupons_contribution entries for coupons no longer on a POS order.
+	 *
+	 * StoreApps' recalculation only adds or updates contribution entries for
+	 * coupons still present on the order. When a store-credit coupon is removed
+	 * at the POS checkout, its stale entry would otherwise still be deducted
+	 * from the gift-card balance when the order is paid.
+	 *
+	 * @param bool     $and_taxes Whether taxes are (re)calculated.
+	 * @param WC_Order $order     Order object.
+	 */
+	public function prune_removed_coupon_contributions( $and_taxes, $order ): void {
+		unset( $and_taxes );
+
+		if ( ! $order instanceof WC_Order || ! $this->is_pos_order( $order ) || ! $this->is_storeapps_available() ) {
+			return;
+		}
+
+		if ( $order->is_paid() ) {
+			return;
+		}
+
+		$contribution = $order->get_meta( 'smart_coupons_contribution', true );
+		if ( ! is_array( $contribution ) || empty( $contribution ) ) {
+			return;
+		}
+
+		$present = array();
+		foreach ( $order->get_items( 'coupon' ) as $coupon_item ) {
+			if ( $coupon_item instanceof WC_Order_Item_Coupon ) {
+				$present[ wc_format_coupon_code( $coupon_item->get_code() ) ] = true;
+			}
+		}
+
+		$changed = false;
+		foreach ( array_keys( $contribution ) as $code ) {
+			if ( ! isset( $present[ wc_format_coupon_code( (string) $code ) ] ) ) {
+				unset( $contribution[ $code ] );
+				$changed = true;
+			}
+		}
+
+		if ( ! $changed ) {
+			return;
+		}
+
+		if ( empty( $contribution ) ) {
+			$order->delete_meta_data( 'smart_coupons_contribution' );
+		} else {
+			$order->update_meta_data( 'smart_coupons_contribution', $contribution );
+		}
+	}
+
+	/**
+	 * Check whether the order carries at least one StoreApps store-credit coupon line.
+	 *
+	 * @param WC_Order $order Order object.
+	 * @return bool
+	 */
+	private function order_has_store_credit_coupon( WC_Order $order ): bool {
+		foreach ( $order->get_items( 'coupon' ) as $coupon_item ) {
+			if ( ! $coupon_item instanceof WC_Order_Item_Coupon ) {
+				continue;
+			}
+
+			if ( $this->is_store_credit_coupon( new WC_Coupon( $coupon_item->get_code() ) ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -118,6 +269,9 @@ class Plugin {
 				$used = $this->infer_single_store_credit_usage( $order, $coupon, $smart_coupon_items );
 			}
 
+			// POS line items can carry sub-cent float residue; never record it as credit usage.
+			$used = round( $used, wc_get_price_decimals() );
+
 			if ( $used <= 0 ) {
 				continue;
 			}
@@ -168,10 +322,10 @@ class Plugin {
 		if ( $this->store_credit_includes_tax( $order ) ) {
 			$used += abs( (float) $order->get_discount_tax() );
 		}
-		$used -= $non_store_credit_usage;
+		$used = round( $used - $non_store_credit_usage, wc_get_price_decimals() );
 
 		if ( $used <= 0 ) {
-			$used = $this->infer_store_credit_usage_from_reduced_order_total( $order ) - $non_store_credit_usage;
+			$used = round( $this->infer_store_credit_usage_from_reduced_order_total( $order ) - $non_store_credit_usage, wc_get_price_decimals() );
 		}
 
 		if ( $used <= 0 ) {

@@ -286,6 +286,36 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 		}
 	}
 
+	public function test_pos_open_to_completed_transition_deducts_store_credit_balance_once(): void {
+		if ( ! class_exists( 'WC_SC_Coupon_Process' ) || ! is_callable( array( 'WC_SC_Coupon_Process', 'get_instance' ) ) ) {
+			$this->markTestSkipped( 'StoreApps Smart Coupons source is not available in this test environment.' );
+		}
+
+		$this->create_store_credit_coupon( 'POSGIFT25', '25' );
+
+		$order = $this->create_pos_order_with_coupon( 'POSGIFT25', '10', '0' );
+		$order->set_status( 'pos-open' );
+
+		Plugin::instance()->capture_pos_order_contribution( true, $order );
+		$order->save();
+
+		$this->assertEquals(
+			array( 'posgift25' => 10.0 ),
+			array_map( 'floatval', (array) $order->get_meta( 'smart_coupons_contribution' ) )
+		);
+
+		// StoreApps has no hook covering pos-open -> completed; the extension must trigger the deduction.
+		$order->set_status( 'completed' );
+		$order->save();
+
+		$this->assertEquals( 15.0, (float) ( new WC_Coupon( 'POSGIFT25' ) )->get_amount() );
+
+		// Re-firing the transition must not deduct again (sc_coupon_deduction_done guard).
+		Plugin::instance()->deduct_store_credit_on_pos_status_change( $order->get_id(), 'pos-open', 'completed', $order );
+
+		$this->assertEquals( 15.0, (float) ( new WC_Coupon( 'POSGIFT25' ) )->get_amount() );
+	}
+
 	/**
 	 * @dataProvider storeapps_balance_regression_provider
 	 */

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 - 2026-08-26
+
+- Apply StoreApps store-credit (gift card) coupons to order totals at the WCPOS checkout. StoreApps only applies `smart_coupon` credit for admin order edits, WooCommerce REST requests, and `store-api` orders; the POS checkout coupon form is a plain front-end POST, so gift cards validated but never changed the amount due. While an unpaid POS order carrying a store-credit coupon recalculates totals, the extension now reports a REST context so StoreApps' own order-discount logic runs. Verified against WCPOS Pro 1.9.9 and 1.10.1 with StoreApps Smart Coupons 9.77.0, in both store-credit tax modes.
+- Prune stale `smart_coupons_contribution` entries when a store-credit coupon is removed at the POS checkout, so removed gift cards are no longer deducted when the order is paid.
+- Ignore sub-cent float residue when inferring store-credit usage from POS order totals; tax-inclusive orders could otherwise record phantom contributions of fractions of a cent.
+
 ## 0.1.1 - 2026-06-02
 
 - Fix POS store-credit balance deductions when WCPOS sends signed or zero-value coupon line discounts to StoreApps Smart Coupons.

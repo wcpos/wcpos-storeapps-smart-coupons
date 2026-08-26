@@ -235,6 +235,57 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 		);
 	}
 
+	public function test_pos_checkout_apply_and_remove_gift_card_adjusts_order_total(): void {
+		if ( ! class_exists( 'WC_Smart_Coupons' ) ) {
+			$this->markTestSkipped( 'StoreApps Smart Coupons source is not available in this test environment.' );
+		}
+
+		$previous_request_uri   = isset( $_SERVER['REQUEST_URI'] ) ? $_SERVER['REQUEST_URI'] : null;
+		$_SERVER['REQUEST_URI'] = '/wcpos-checkout/order-pay/1/';
+
+		try {
+			$gift = $this->create_store_credit_coupon( 'GIFT25', '25' );
+
+			$product = new WC_Product_Simple();
+			$product->set_name( 'POS checkout product' );
+			$product->set_regular_price( '10.00' );
+			$product->save();
+
+			$order = new WC_Order();
+			$order->set_created_via( 'woocommerce-pos' );
+			$order->add_product( $product, 1 );
+			$order->calculate_totals();
+			$order->save();
+
+			// Same call the WCPOS checkout coupon form makes on a plain front-end POST.
+			$result = $order->apply_coupon( $gift->get_code() );
+
+			$this->assertNotWPError( $result );
+			$this->assertEquals( 10.0, (float) $order->get_discount_total() );
+			$this->assertEquals( 0.0, (float) $order->get_total() );
+			$this->assertEquals(
+				array( 'gift25' => 10.0 ),
+				array_map( 'floatval', (array) $order->get_meta( 'smart_coupons_contribution' ) )
+			);
+
+			$order->remove_coupon( $gift->get_code() );
+
+			$this->assertEquals( 0.0, (float) $order->get_discount_total() );
+			$this->assertEquals( 10.0, (float) $order->get_total() );
+			$this->assertSame( '', $order->get_meta( 'smart_coupons_contribution' ) );
+
+			$reloaded = wc_get_order( $order->get_id() );
+			$this->assertEquals( 10.0, (float) $reloaded->get_total() );
+			$this->assertSame( '', $reloaded->get_meta( 'smart_coupons_contribution' ) );
+		} finally {
+			if ( null === $previous_request_uri ) {
+				unset( $_SERVER['REQUEST_URI'] );
+			} else {
+				$_SERVER['REQUEST_URI'] = $previous_request_uri;
+			}
+		}
+	}
+
 	/**
 	 * @dataProvider storeapps_balance_regression_provider
 	 */
@@ -261,6 +312,176 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 			'negative POS discount subtracts' => array( '-2', '0', 8.0 ),
 			'zero POS discount subtracts'     => array( '0', '2', 8.0 ),
 		);
+	}
+
+	public function test_pos_order_recalculation_reports_rest_context_while_store_credit_coupon_present(): void {
+		$previous_request_uri   = isset( $_SERVER['REQUEST_URI'] ) ? $_SERVER['REQUEST_URI'] : null;
+		$_SERVER['REQUEST_URI'] = '/wcpos-checkout/order-pay/1/';
+
+		try {
+			$this->create_store_credit_coupon( 'STORE100', '100' );
+
+			$order = new WC_Order();
+			$order->set_created_via( 'woocommerce-pos' );
+			$item = new WC_Order_Item_Coupon();
+			$item->set_code( 'STORE100' );
+			$order->add_item( $item );
+			$order->save();
+
+			$this->assertFalse( WC()->is_rest_api_request() );
+
+			$seen  = array();
+			$probe = static function () use ( &$seen ): void {
+				$seen[] = WC()->is_rest_api_request();
+			};
+			// Same hook and priority StoreApps uses for its order-context gate check.
+			add_action( 'woocommerce_order_after_calculate_totals', $probe, 10 );
+
+			try {
+				$order->calculate_totals();
+			} finally {
+				remove_action( 'woocommerce_order_after_calculate_totals', $probe, 10 );
+			}
+
+			$this->assertSame( array( true ), $seen );
+			$this->assertFalse( WC()->is_rest_api_request(), 'Gate must close after totals are calculated.' );
+		} finally {
+			if ( null === $previous_request_uri ) {
+				unset( $_SERVER['REQUEST_URI'] );
+			} else {
+				$_SERVER['REQUEST_URI'] = $previous_request_uri;
+			}
+		}
+	}
+
+	public function test_non_pos_order_recalculation_does_not_report_rest_context(): void {
+		$previous_request_uri   = isset( $_SERVER['REQUEST_URI'] ) ? $_SERVER['REQUEST_URI'] : null;
+		$_SERVER['REQUEST_URI'] = '/checkout/';
+
+		try {
+			$this->create_store_credit_coupon( 'STORE100', '100' );
+
+			$order = new WC_Order();
+			$order->set_created_via( 'checkout' );
+			$item = new WC_Order_Item_Coupon();
+			$item->set_code( 'STORE100' );
+			$order->add_item( $item );
+			$order->save();
+
+			$seen  = array();
+			$probe = static function () use ( &$seen ): void {
+				$seen[] = WC()->is_rest_api_request();
+			};
+			add_action( 'woocommerce_order_after_calculate_totals', $probe, 10 );
+
+			try {
+				$order->calculate_totals();
+			} finally {
+				remove_action( 'woocommerce_order_after_calculate_totals', $probe, 10 );
+			}
+
+			$this->assertSame( array( false ), $seen );
+		} finally {
+			if ( null === $previous_request_uri ) {
+				unset( $_SERVER['REQUEST_URI'] );
+			} else {
+				$_SERVER['REQUEST_URI'] = $previous_request_uri;
+			}
+		}
+	}
+
+	public function test_paid_pos_order_recalculation_does_not_report_rest_context(): void {
+		$previous_request_uri   = isset( $_SERVER['REQUEST_URI'] ) ? $_SERVER['REQUEST_URI'] : null;
+		$_SERVER['REQUEST_URI'] = '/wcpos-checkout/order-pay/1/';
+
+		try {
+			$this->create_store_credit_coupon( 'STORE100', '100' );
+
+			$order = new WC_Order();
+			$order->set_created_via( 'woocommerce-pos' );
+			$order->set_status( 'processing' );
+			$item = new WC_Order_Item_Coupon();
+			$item->set_code( 'STORE100' );
+			$order->add_item( $item );
+			$order->save();
+
+			$seen  = array();
+			$probe = static function () use ( &$seen ): void {
+				$seen[] = WC()->is_rest_api_request();
+			};
+			add_action( 'woocommerce_order_after_calculate_totals', $probe, 10 );
+
+			try {
+				$order->calculate_totals();
+			} finally {
+				remove_action( 'woocommerce_order_after_calculate_totals', $probe, 10 );
+			}
+
+			$this->assertSame( array( false ), $seen );
+		} finally {
+			if ( null === $previous_request_uri ) {
+				unset( $_SERVER['REQUEST_URI'] );
+			} else {
+				$_SERVER['REQUEST_URI'] = $previous_request_uri;
+			}
+		}
+	}
+
+	public function test_prune_removes_contribution_entries_for_removed_coupons(): void {
+		$this->create_store_credit_coupon( 'STOREA', '50' );
+		$this->create_store_credit_coupon( 'STOREB', '50' );
+
+		$order = $this->create_pos_order_with_coupon( 'STOREA', '10', '0' );
+		$order->update_meta_data(
+			'smart_coupons_contribution',
+			array(
+				'storea' => 10.0,
+				'storeb' => 20.0,
+			)
+		);
+
+		Plugin::instance()->prune_removed_coupon_contributions( true, $order );
+
+		$this->assertEquals(
+			array( 'storea' => 10.0 ),
+			$order->get_meta( 'smart_coupons_contribution' )
+		);
+	}
+
+	public function test_prune_deletes_contribution_meta_when_all_coupons_removed(): void {
+		$order = new WC_Order();
+		$order->set_created_via( 'woocommerce-pos' );
+		$order->update_meta_data( 'smart_coupons_contribution', array( 'storea' => 10.0 ) );
+
+		Plugin::instance()->prune_removed_coupon_contributions( true, $order );
+
+		$this->assertSame( '', $order->get_meta( 'smart_coupons_contribution' ) );
+	}
+
+	public function test_prune_leaves_paid_orders_untouched(): void {
+		$order = new WC_Order();
+		$order->set_created_via( 'woocommerce-pos' );
+		$order->set_status( 'completed' );
+		$order->update_meta_data( 'smart_coupons_contribution', array( 'storea' => 10.0 ) );
+
+		Plugin::instance()->prune_removed_coupon_contributions( true, $order );
+
+		$this->assertEquals(
+			array( 'storea' => 10.0 ),
+			$order->get_meta( 'smart_coupons_contribution' )
+		);
+	}
+
+	public function test_pos_order_sub_cent_total_residue_is_not_recorded_as_store_credit_usage(): void {
+		$this->create_store_credit_coupon( 'STORE100', '100' );
+		$order = $this->create_pos_order_with_coupon( 'STORE100', '0', '0' );
+		// Tax-inclusive pricing leaves float residue: 9.090909 + 0.91 = 10.000909 vs a 10.00 total.
+		$this->add_product_line( $order, '9.090909', '9.090909', '0.91', '0.91' );
+		$order->set_total( '10.00' );
+
+		Plugin::instance()->capture_pos_order_contribution( true, $order );
+
+		$this->assertSame( '', $order->get_meta( 'smart_coupons_contribution' ) );
 	}
 
 	public function test_pos_order_coupon_lines_create_smart_coupons_contribution_meta(): void {

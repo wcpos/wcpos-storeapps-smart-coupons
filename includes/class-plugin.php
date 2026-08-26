@@ -58,6 +58,7 @@ class Plugin {
 		add_action( 'woocommerce_order_after_calculate_totals', array( $this, 'prune_removed_coupon_contributions' ), 25, 2 );
 		add_action( 'woocommerce_order_after_calculate_totals', array( $this, 'capture_pos_order_contribution' ), 30, 2 );
 		add_action( 'woocommerce_order_after_calculate_totals', array( $this, 'close_storeapps_order_context_gate' ), 999 );
+		add_action( 'woocommerce_order_status_changed', array( $this, 'deduct_store_credit_on_pos_status_change' ), 20, 4 );
 		add_action( 'woocommerce_order_status_changed', array( $this, 'add_store_credit_audit_note_after_status_change' ), 30, 4 );
 		add_action( 'woocommerce_pos_before_template_render', array( $this, 'set_receipt_order_context' ), 10, 2 );
 		add_action( 'woocommerce_pos_after_template_render', array( $this, 'clear_receipt_order_context' ) );
@@ -465,6 +466,55 @@ class Plugin {
 		$used = $pre_coupon_total - $remaining_total;
 
 		return $used > 0 ? $used : 0.0;
+	}
+
+	/**
+	 * Deduct store-credit balances when a POS order transitions to a paid status.
+	 *
+	 * StoreApps' update_smart_coupon_balance only runs on transitions from
+	 * `pending`/`failed` to a paid status, and its third-party status handler
+	 * bails whenever either side of the transition is a core status. WCPOS
+	 * orders move from `pos-open`/`pos-partial` to `processing`/`completed`,
+	 * so no StoreApps hook fires and the gift-card balance is never reduced.
+	 * update_smart_coupon_balance marks each coupon line with
+	 * `sc_coupon_deduction_done`, so invoking it here cannot double-deduct.
+	 *
+	 * @param int      $order_id   Order ID.
+	 * @param string   $old_status Previous order status.
+	 * @param string   $new_status New order status.
+	 * @param WC_Order $order      Order object.
+	 */
+	public function deduct_store_credit_on_pos_status_change( $order_id, $old_status, $new_status, $order ): void {
+		if ( ! $order instanceof WC_Order ) {
+			$order = wc_get_order( $order_id );
+		}
+
+		if ( ! $order instanceof WC_Order || ! $this->is_pos_order( $order ) || ! $this->is_storeapps_available() ) {
+			return;
+		}
+
+		// StoreApps' own transition hooks already cover these old statuses.
+		if ( in_array( $old_status, array( 'pending', 'failed' ), true ) ) {
+			return;
+		}
+
+		$paid_statuses = array_unique( array_merge( wc_get_is_paid_statuses(), array( 'on-hold' ) ) );
+		if ( ! in_array( $new_status, $paid_statuses, true ) ) {
+			return;
+		}
+
+		if ( ! $this->order_has_store_credit_coupon( $order ) ) {
+			return;
+		}
+
+		if ( ! class_exists( 'WC_SC_Coupon_Process' ) || ! is_callable( array( 'WC_SC_Coupon_Process', 'get_instance' ) ) ) {
+			return;
+		}
+
+		$processor = \WC_SC_Coupon_Process::get_instance();
+		if ( is_callable( array( $processor, 'update_smart_coupon_balance' ) ) ) {
+			$processor->update_smart_coupon_balance( $order_id );
+		}
 	}
 
 	/**

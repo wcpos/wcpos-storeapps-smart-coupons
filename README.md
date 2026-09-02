@@ -13,6 +13,7 @@ Current compatibility layer:
 - captures `smart_coupons_contribution` order meta for POS REST orders so StoreApps can deduct the correct partial store-credit amount from gift-card balances;
 - adds a private order note after StoreApps processes the POS store-credit redemption so staff have an audit trail of the coupon code, amount used, and current balance;
 - appends the remaining store-credit balance to the existing coupon description/discount label while WCPOS receipts are rendered, so current receipt templates show it in the discount row without custom receipt data;
+- on WCPOS 1.10.8 and later, marks store-credit rows in the receipt data through the `woocommerce_pos_receipt_data` filter (`gift_card: true` plus the balance on the row label), so a template can print "Gift Card" instead of "Discount" with `{{#gift_card}}Gift Card{{/gift_card}}{{^gift_card}}{{i18n.discount}}{{/gift_card}}`;
 - preserves normal WooCommerce coupon REST responses and relies on StoreApps/WooCommerce coupon metadata instead of adding WCPOS-specific coupon fields.
 
 ## Development

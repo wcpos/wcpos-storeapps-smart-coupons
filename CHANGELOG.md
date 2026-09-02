@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2 - 2026-09-02
+
+- Restore the "Store credit balance" text on POS receipts under WCPOS 1.10. WCPOS 1.10 moved the POS app onto the `wcpos/v2` REST namespace, and the receipt-order context was only recognised on `/wcpos/v1/receipts/`, so the balance label silently disappeared from receipt discount lines. The extension now matches any `wcpos/v{n}` receipts route. Verified live against WCPOS Pro 1.10.2 (bundled free 1.10.6) with StoreApps Smart Coupons 9.77.0.
+- Include the balance label in WCPOS 1.10 fiscal receipt snapshots. WCPOS captures an immutable receipt snapshot on `woocommerce_payment_complete` and serves it in fiscal receipt mode; the receipt-order context is now set for POS orders around that hook so the label is present at capture time.
+
 ## 0.2.1 - 2026-08-26
 
 - Deduct gift-card balances when a POS order is paid. StoreApps' balance deduction only runs on `pending`/`failed` → paid transitions, and its third-party status handler ignores transitions into core statuses — so WCPOS orders moving from `pos-open`/`pos-partial` to `processing`/`completed` never reduced the store-credit balance. The extension now invokes StoreApps' own (idempotent) `update_smart_coupon_balance` for those transitions.

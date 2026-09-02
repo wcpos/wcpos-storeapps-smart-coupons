@@ -553,7 +553,7 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 	/**
 	 * @dataProvider wcpos_receipt_route_provider
 	 */
-	public function test_rest_receipt_request_appends_store_credit_balance_for_wcpos_receipt_routes( string $namespace ): void {
+	public function test_rest_receipt_request_appends_store_credit_balance_for_wcpos_receipt_routes( string $rest_namespace ): void {
 		$coupon = $this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
 		$order  = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
 
@@ -563,7 +563,7 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 		$coupon->set_amount( '65' );
 		$coupon->save();
 
-		$request = new WP_REST_Request( 'GET', '/' . $namespace . '/receipts/' . $order->get_id() );
+		$request = new WP_REST_Request( 'GET', '/' . $rest_namespace . '/receipts/' . $order->get_id() );
 		$request->set_param( 'order_id', $order->get_id() );
 
 		Plugin::instance()->set_rest_receipt_order_context( null, array(), $request );

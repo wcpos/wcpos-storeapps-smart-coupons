@@ -62,6 +62,8 @@ class Plugin {
 		add_action( 'woocommerce_order_status_changed', array( $this, 'add_store_credit_audit_note_after_status_change' ), 30, 4 );
 		add_action( 'woocommerce_pos_before_template_render', array( $this, 'set_receipt_order_context' ), 10, 2 );
 		add_action( 'woocommerce_pos_after_template_render', array( $this, 'clear_receipt_order_context' ) );
+		add_action( 'woocommerce_payment_complete', array( $this, 'set_payment_complete_receipt_order_context' ), 1 );
+		add_action( 'woocommerce_payment_complete', array( $this, 'clear_receipt_order_context' ), 999 );
 		add_filter( 'rest_request_before_callbacks', array( $this, 'set_rest_receipt_order_context' ), 10, 3 );
 		add_filter( 'rest_request_after_callbacks', array( $this, 'clear_rest_receipt_order_context' ), 10, 3 );
 		add_filter( 'woocommerce_coupon_get_description', array( $this, 'append_store_credit_receipt_label' ), 10, 2 );
@@ -618,6 +620,28 @@ class Plugin {
 	}
 
 	/**
+	 * Set receipt context while WCPOS captures a fiscal receipt snapshot.
+	 *
+	 * WCPOS >= 1.10 builds an immutable "fiscal" receipt snapshot on
+	 * `woocommerce_payment_complete` (priority 10) and serves it whenever a
+	 * receipt is requested in fiscal mode. The snapshot is written once and never
+	 * rebuilt, so the store-credit label has to be present at capture time.
+	 * Store-credit deduction runs on the status transition inside
+	 * `WC_Order::payment_complete()`, before this hook fires, so the balance
+	 * captured here is the post-deduction balance.
+	 *
+	 * @param int $order_id Order ID.
+	 */
+	public function set_payment_complete_receipt_order_context( $order_id ): void {
+		$order = wc_get_order( (int) $order_id );
+		if ( ! $order instanceof WC_Order || ! $this->is_pos_order( $order ) ) {
+			return;
+		}
+
+		$this->receipt_order = $order;
+	}
+
+	/**
 	 * Set receipt context while WCPOS REST receipt data is being built.
 	 *
 	 * @param mixed            $response Current REST response.
@@ -628,7 +652,7 @@ class Plugin {
 	public function set_rest_receipt_order_context( $response, $handler, $request ) {
 		unset( $handler );
 
-		if ( ! $request instanceof \WP_REST_Request || 0 !== strpos( $request->get_route(), '/wcpos/v1/receipts/' ) ) {
+		if ( ! $request instanceof \WP_REST_Request || ! $this->is_wcpos_receipt_route( $request->get_route() ) ) {
 			return $response;
 		}
 
@@ -654,11 +678,25 @@ class Plugin {
 	public function clear_rest_receipt_order_context( $response, $handler, $request ) {
 		unset( $handler );
 
-		if ( $request instanceof \WP_REST_Request && 0 === strpos( $request->get_route(), '/wcpos/v1/receipts/' ) ) {
+		if ( $request instanceof \WP_REST_Request && $this->is_wcpos_receipt_route( $request->get_route() ) ) {
 			$this->receipt_order = null;
 		}
 
 		return $response;
+	}
+
+	/**
+	 * Check whether a REST route is a WCPOS receipt endpoint.
+	 *
+	 * WCPOS 1.10 introduced the `wcpos/v2` namespace and the POS app now fetches
+	 * receipts from `/wcpos/v2/receipts/{order_id}`. Older apps still use `v1`,
+	 * so match any version rather than pinning one.
+	 *
+	 * @param string $route REST route.
+	 * @return bool
+	 */
+	private function is_wcpos_receipt_route( string $route ): bool {
+		return 1 === preg_match( '#^/wcpos/v\d+/receipts/#', $route );
 	}
 
 	/**

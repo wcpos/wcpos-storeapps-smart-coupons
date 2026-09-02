@@ -551,6 +551,8 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 	}
 
 	/**
+	 * WCPOS < 1.10 fetches receipts from wcpos/v1 and WCPOS >= 1.10 from wcpos/v2; both must set the receipt context.
+	 *
 	 * @dataProvider wcpos_receipt_route_provider
 	 */
 	public function test_rest_receipt_request_appends_store_credit_balance_for_wcpos_receipt_routes( string $rest_namespace ): void {
@@ -580,6 +582,11 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 		$this->assertSame( 'Gift card', $description_after_request );
 	}
 
+	/**
+	 * REST namespaces WCPOS has served receipts from.
+	 *
+	 * @return array
+	 */
 	public function wcpos_receipt_route_provider(): array {
 		return array(
 			'wcpos/v1 (WCPOS < 1.10)'  => array( 'wcpos/v1' ),
@@ -587,6 +594,9 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 		);
 	}
 
+	/**
+	 * Non-receipt WCPOS routes must not leak the balance label into coupon descriptions.
+	 */
 	public function test_rest_request_outside_wcpos_receipt_routes_does_not_append_store_credit_balance(): void {
 		$this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
 		$order = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
@@ -607,6 +617,9 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 		$this->assertSame( 'Gift card', $description );
 	}
 
+	/**
+	 * WCPOS >= 1.10 captures its fiscal receipt snapshot on woocommerce_payment_complete at priority 10.
+	 */
 	public function test_payment_complete_appends_store_credit_balance_while_wcpos_captures_fiscal_snapshot(): void {
 		$coupon = $this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
 		$order  = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
@@ -636,6 +649,9 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 		$this->assertSame( 'Gift card', $description_after );
 	}
 
+	/**
+	 * Online orders paid with store credit are not POS receipts and must keep their plain description.
+	 */
 	public function test_payment_complete_for_non_pos_order_does_not_append_store_credit_balance(): void {
 		$this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
 		$order = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );

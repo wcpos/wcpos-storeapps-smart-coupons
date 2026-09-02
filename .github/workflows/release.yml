@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  # Manual fallback: GitHub occasionally drops the push event for a merge commit,
+  # leaving a merged version with no release run at all.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

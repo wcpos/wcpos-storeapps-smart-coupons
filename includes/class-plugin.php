@@ -62,6 +62,8 @@ class Plugin {
 		add_action( 'woocommerce_order_status_changed', array( $this, 'add_store_credit_audit_note_after_status_change' ), 30, 4 );
 		add_action( 'woocommerce_pos_before_template_render', array( $this, 'set_receipt_order_context' ), 10, 2 );
 		add_action( 'woocommerce_pos_after_template_render', array( $this, 'clear_receipt_order_context' ) );
+		add_action( 'woocommerce_payment_complete', array( $this, 'set_payment_complete_receipt_order_context' ), 1 );
+		add_action( 'woocommerce_payment_complete', array( $this, 'clear_receipt_order_context' ), 999 );
 		add_filter( 'rest_request_before_callbacks', array( $this, 'set_rest_receipt_order_context' ), 10, 3 );
 		add_filter( 'rest_request_after_callbacks', array( $this, 'clear_rest_receipt_order_context' ), 10, 3 );
 		add_filter( 'woocommerce_coupon_get_description', array( $this, 'append_store_credit_receipt_label' ), 10, 2 );
@@ -615,6 +617,28 @@ class Plugin {
 	 */
 	public function clear_receipt_order_context(): void {
 		$this->receipt_order = null;
+	}
+
+	/**
+	 * Set receipt context while WCPOS captures a fiscal receipt snapshot.
+	 *
+	 * WCPOS >= 1.10 builds an immutable "fiscal" receipt snapshot on
+	 * `woocommerce_payment_complete` (priority 10) and serves it whenever a
+	 * receipt is requested in fiscal mode. The snapshot is written once and never
+	 * rebuilt, so the store-credit label has to be present at capture time.
+	 * Store-credit deduction runs on the status transition inside
+	 * `WC_Order::payment_complete()`, before this hook fires, so the balance
+	 * captured here is the post-deduction balance.
+	 *
+	 * @param int $order_id Order ID.
+	 */
+	public function set_payment_complete_receipt_order_context( $order_id ): void {
+		$order = wc_get_order( (int) $order_id );
+		if ( ! $order instanceof WC_Order || ! $this->is_pos_order( $order ) ) {
+			return;
+		}
+
+		$this->receipt_order = $order;
 	}
 
 	/**

@@ -606,4 +606,54 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 
 		$this->assertSame( 'Gift card', $description );
 	}
+
+	public function test_payment_complete_appends_store_credit_balance_while_wcpos_captures_fiscal_snapshot(): void {
+		$coupon = $this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
+		$order  = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
+
+		Plugin::instance()->capture_pos_order_contribution( true, $order );
+		$order->save();
+
+		$coupon->set_amount( '65' );
+		$coupon->save();
+
+		// WCPOS builds its fiscal receipt snapshot on this hook at priority 10.
+		$description_during_snapshot = null;
+		$snapshot_builder            = static function () use ( &$description_during_snapshot ): void {
+			$description_during_snapshot = ( new WC_Coupon( 'STORE100' ) )->get_description();
+		};
+		add_action( 'woocommerce_payment_complete', $snapshot_builder, 10 );
+		try {
+			do_action( 'woocommerce_payment_complete', $order->get_id() );
+		} finally {
+			remove_action( 'woocommerce_payment_complete', $snapshot_builder, 10 );
+		}
+		$description_after = ( new WC_Coupon( 'STORE100' ) )->get_description();
+
+		$this->assertStringContainsString( 'Gift card', $description_during_snapshot );
+		$this->assertStringContainsString( 'Store credit balance:', $description_during_snapshot );
+		$this->assertStringContainsString( '65', $description_during_snapshot );
+		$this->assertSame( 'Gift card', $description_after );
+	}
+
+	public function test_payment_complete_for_non_pos_order_does_not_append_store_credit_balance(): void {
+		$this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
+		$order = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
+		$order->set_created_via( 'checkout' );
+		$order->update_meta_data( 'smart_coupons_contribution', array( 'store100' => 35.0 ) );
+		$order->save();
+
+		$description_during_snapshot = null;
+		$snapshot_builder            = static function () use ( &$description_during_snapshot ): void {
+			$description_during_snapshot = ( new WC_Coupon( 'STORE100' ) )->get_description();
+		};
+		add_action( 'woocommerce_payment_complete', $snapshot_builder, 10 );
+		try {
+			do_action( 'woocommerce_payment_complete', $order->get_id() );
+		} finally {
+			remove_action( 'woocommerce_payment_complete', $snapshot_builder, 10 );
+		}
+
+		$this->assertSame( 'Gift card', $description_during_snapshot );
+	}
 }

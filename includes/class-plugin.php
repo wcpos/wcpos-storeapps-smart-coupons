@@ -628,7 +628,7 @@ class Plugin {
 	public function set_rest_receipt_order_context( $response, $handler, $request ) {
 		unset( $handler );
 
-		if ( ! $request instanceof \WP_REST_Request || 0 !== strpos( $request->get_route(), '/wcpos/v1/receipts/' ) ) {
+		if ( ! $request instanceof \WP_REST_Request || ! $this->is_wcpos_receipt_route( $request->get_route() ) ) {
 			return $response;
 		}
 
@@ -654,11 +654,25 @@ class Plugin {
 	public function clear_rest_receipt_order_context( $response, $handler, $request ) {
 		unset( $handler );
 
-		if ( $request instanceof \WP_REST_Request && 0 === strpos( $request->get_route(), '/wcpos/v1/receipts/' ) ) {
+		if ( $request instanceof \WP_REST_Request && $this->is_wcpos_receipt_route( $request->get_route() ) ) {
 			$this->receipt_order = null;
 		}
 
 		return $response;
+	}
+
+	/**
+	 * Check whether a REST route is a WCPOS receipt endpoint.
+	 *
+	 * WCPOS 1.10 introduced the `wcpos/v2` namespace and the POS app now fetches
+	 * receipts from `/wcpos/v2/receipts/{order_id}`. Older apps still use `v1`,
+	 * so match any version rather than pinning one.
+	 *
+	 * @param string $route REST route.
+	 * @return bool
+	 */
+	private function is_wcpos_receipt_route( string $route ): bool {
+		return 1 === preg_match( '#^/wcpos/v\d+/receipts/#', $route );
 	}
 
 	/**

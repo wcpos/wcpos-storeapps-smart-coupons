@@ -549,4 +549,61 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'Store credit balance:', $receipt_coupon_description );
 		$this->assertStringContainsString( '65', $receipt_coupon_description );
 	}
+
+	/**
+	 * @dataProvider wcpos_receipt_route_provider
+	 */
+	public function test_rest_receipt_request_appends_store_credit_balance_for_wcpos_receipt_routes( string $namespace ): void {
+		$coupon = $this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
+		$order  = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
+
+		Plugin::instance()->capture_pos_order_contribution( true, $order );
+		$order->save();
+
+		$coupon->set_amount( '65' );
+		$coupon->save();
+
+		$request = new WP_REST_Request( 'GET', '/' . $namespace . '/receipts/' . $order->get_id() );
+		$request->set_param( 'order_id', $order->get_id() );
+
+		Plugin::instance()->set_rest_receipt_order_context( null, array(), $request );
+		try {
+			$description_during_request = ( new WC_Coupon( 'STORE100' ) )->get_description();
+		} finally {
+			Plugin::instance()->clear_rest_receipt_order_context( null, array(), $request );
+		}
+		$description_after_request = ( new WC_Coupon( 'STORE100' ) )->get_description();
+
+		$this->assertStringContainsString( 'Gift card', $description_during_request );
+		$this->assertStringContainsString( 'Store credit balance:', $description_during_request );
+		$this->assertStringContainsString( '65', $description_during_request );
+		$this->assertSame( 'Gift card', $description_after_request );
+	}
+
+	public function wcpos_receipt_route_provider(): array {
+		return array(
+			'wcpos/v1 (WCPOS < 1.10)'  => array( 'wcpos/v1' ),
+			'wcpos/v2 (WCPOS >= 1.10)' => array( 'wcpos/v2' ),
+		);
+	}
+
+	public function test_rest_request_outside_wcpos_receipt_routes_does_not_append_store_credit_balance(): void {
+		$this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
+		$order = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
+
+		Plugin::instance()->capture_pos_order_contribution( true, $order );
+		$order->save();
+
+		$request = new WP_REST_Request( 'GET', '/wcpos/v2/orders/' . $order->get_id() );
+		$request->set_param( 'id', $order->get_id() );
+
+		Plugin::instance()->set_rest_receipt_order_context( null, array(), $request );
+		try {
+			$description = ( new WC_Coupon( 'STORE100' ) )->get_description();
+		} finally {
+			Plugin::instance()->clear_rest_receipt_order_context( null, array(), $request );
+		}
+
+		$this->assertSame( 'Gift card', $description );
+	}
 }

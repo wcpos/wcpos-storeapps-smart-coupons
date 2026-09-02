@@ -746,23 +746,47 @@ class Plugin {
 			return $data;
 		}
 
+		if ( ! $this->is_pos_order( $order ) || ! $this->is_storeapps_available() ) {
+			return $data;
+		}
+
+		$contribution = $order->get_meta( 'smart_coupons_contribution', true );
+		if ( empty( $contribution ) || ! is_array( $contribution ) ) {
+			return $data;
+		}
+
 		foreach ( $data['discounts'] as $index => $row ) {
 			if ( ! is_array( $row ) || empty( $row['code'] ) ) {
 				continue;
 			}
 
-			$coupon = new WC_Coupon( (string) $row['code'] );
-			if ( ! $coupon->get_id() ) {
+			$code = wc_format_coupon_code( (string) $row['code'] );
+			if ( ! array_key_exists( $code, $contribution ) ) {
 				continue;
 			}
 
-			$balance_label = $this->get_store_credit_balance_label( $order, $coupon );
-			if ( null === $balance_label ) {
+			// The coupon post may be gone or retyped since the sale; the row's captured
+			// discount_type (WCPOS >= 1.10.8) still identifies it as store credit.
+			$coupon = new WC_Coupon( $code );
+			if ( ! $coupon->get_id() ) {
+				$coupon = null;
+			}
+
+			$captured_type = isset( $row['discount_type'] ) ? (string) $row['discount_type'] : '';
+			if ( 'smart_coupon' !== $captured_type && ( null === $coupon || ! $this->is_store_credit_coupon( $coupon ) ) ) {
 				continue;
 			}
 
 			$data['discounts'][ $index ]['gift_card'] = true;
-			$data['discounts'][ $index ]['label']     = $this->compose_store_credit_label( $coupon->get_description(), $balance_label );
+
+			// The balance needs the live coupon. Keep WCPOS's own label (description or
+			// code) as the base so the card stays identifiable when it has no description.
+			if ( null !== $coupon ) {
+				$data['discounts'][ $index ]['label'] = $this->compose_store_credit_label(
+					isset( $row['label'] ) ? (string) $row['label'] : '',
+					$this->format_store_credit_balance_label( $order, $coupon )
+				);
+			}
 		}
 
 		return $data;
@@ -789,6 +813,17 @@ class Plugin {
 			return null;
 		}
 
+		return $this->format_store_credit_balance_label( $order, $coupon );
+	}
+
+	/**
+	 * Format the "Store credit balance" text for a coupon's current amount.
+	 *
+	 * @param WC_Order  $order  Order the receipt is for (supplies the currency).
+	 * @param WC_Coupon $coupon Store-credit coupon.
+	 * @return string
+	 */
+	private function format_store_credit_balance_label( WC_Order $order, WC_Coupon $coupon ): string {
 		return sprintf(
 			/* translators: %s: current store-credit balance */
 			__( 'Store credit balance: %s', 'wcpos-storeapps-smart-coupons' ),

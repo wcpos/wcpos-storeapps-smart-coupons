@@ -804,4 +804,86 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 		$this->assertStringContainsString( '65', $row['label'] );
 		$this->assertSame( 1, substr_count( $row['label'], 'Store credit balance:' ) );
 	}
+
+	/**
+	 * A gift card with no description keeps WCPOS's code label as the base, so the card stays identifiable.
+	 */
+	public function test_receipt_data_filter_keeps_code_label_when_description_is_empty(): void {
+		$coupon = $this->create_store_credit_coupon( 'STORE100', '100' );
+		$order  = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
+
+		Plugin::instance()->capture_pos_order_contribution( true, $order );
+		$order->save();
+
+		$coupon->set_amount( '65' );
+		$coupon->save();
+
+		$data = array(
+			'discounts' => array(
+				array(
+					'label'         => 'store100',
+					'code'          => 'store100',
+					'discount_type' => 'smart_coupon',
+				),
+			),
+		);
+
+		$filtered = Plugin::instance()->mark_store_credit_receipt_rows( $data, $order, 'live' );
+
+		$this->assertTrue( $filtered['discounts'][0]['gift_card'] );
+		$this->assertStringStartsWith( 'store100', $filtered['discounts'][0]['label'] );
+		$this->assertStringContainsString( 'Store credit balance:', $filtered['discounts'][0]['label'] );
+		$this->assertStringContainsString( '65', $filtered['discounts'][0]['label'] );
+	}
+
+	/**
+	 * A deleted gift card is still flagged from the captured discount_type; only the balance is unavailable.
+	 */
+	public function test_receipt_data_filter_flags_deleted_store_credit_coupon_from_captured_type(): void {
+		$coupon = $this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
+		$order  = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
+
+		Plugin::instance()->capture_pos_order_contribution( true, $order );
+		$order->save();
+
+		$coupon->delete( true );
+
+		$data = array(
+			'discounts' => array(
+				array(
+					'label'         => 'store100',
+					'code'          => 'store100',
+					'discount_type' => 'smart_coupon',
+				),
+			),
+		);
+
+		$filtered = Plugin::instance()->mark_store_credit_receipt_rows( $data, $order, 'live' );
+
+		$this->assertTrue( $filtered['discounts'][0]['gift_card'] );
+		$this->assertSame( 'store100', $filtered['discounts'][0]['label'] );
+	}
+
+	/**
+	 * A deleted ordinary coupon is not flagged just because the order carries a contribution for some other code.
+	 */
+	public function test_receipt_data_filter_ignores_deleted_non_store_credit_rows(): void {
+		$this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
+		$order = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
+
+		Plugin::instance()->capture_pos_order_contribution( true, $order );
+		$order->save();
+
+		$data = array(
+			'discounts' => array(
+				array(
+					'label'         => 'summer10',
+					'code'          => 'summer10',
+					'discount_type' => 'fixed_cart',
+				),
+			),
+		);
+
+		$this->assertSame( $data, Plugin::instance()->mark_store_credit_receipt_rows( $data, $order, 'live' ) );
+	}
 }

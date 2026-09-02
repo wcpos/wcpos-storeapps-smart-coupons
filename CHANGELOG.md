@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3 - 2026-09-02
+
+- Mark store-credit rows in WCPOS receipt data. WCPOS 1.10.8 filters its canonical receipt payload through `woocommerce_pos_receipt_data`; for POS orders paid with StoreApps store credit the extension now adds `gift_card: true` to the matching discount row and puts the balance text on the row label. Templates can print "Gift Card" instead of "Discount" with `{{#gift_card}}Gift Card{{/gift_card}}{{^gift_card}}{{i18n.discount}}{{/gift_card}}`. Older WCPOS versions keep the coupon-description path from 0.2.2.
+
 ## 0.2.2 - 2026-09-02
 
 - Restore the "Store credit balance" text on POS receipts under WCPOS 1.10. WCPOS 1.10 moved the POS app onto the `wcpos/v2` REST namespace, and the receipt-order context was only recognised on `/wcpos/v1/receipts/`, so the balance label silently disappeared from receipt discount lines. The extension now matches any `wcpos/v{n}` receipts route. Verified live against WCPOS Pro 1.10.2 (bundled free 1.10.6) with StoreApps Smart Coupons 9.77.0.

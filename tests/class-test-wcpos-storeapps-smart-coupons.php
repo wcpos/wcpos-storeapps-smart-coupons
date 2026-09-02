@@ -672,4 +672,136 @@ class Test_Wcpos_Storeapps_Smart_Coupons extends WP_UnitTestCase {
 
 		$this->assertSame( 'Gift card', $description_during_snapshot );
 	}
+
+	/**
+	 * WCPOS >= 1.10.8 filters its receipt payload; store-credit rows on POS orders get flagged and relabelled.
+	 */
+	public function test_receipt_data_filter_marks_store_credit_rows_on_pos_orders(): void {
+		$coupon = $this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
+		$this->create_fixed_cart_coupon( 'SUMMER10', '10' );
+		$order = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
+
+		Plugin::instance()->capture_pos_order_contribution( true, $order );
+		$order->save();
+
+		$coupon->set_amount( '65' );
+		$coupon->save();
+
+		$data = array(
+			'discounts' => array(
+				array(
+					'label'         => 'Gift card',
+					'code'          => 'store100',
+					'discount_type' => 'smart_coupon',
+					'total'         => 35.0,
+				),
+				array(
+					'label'         => 'summer10',
+					'code'          => 'summer10',
+					'discount_type' => 'fixed_cart',
+					'total'         => 10.0,
+				),
+			),
+		);
+
+		$filtered = Plugin::instance()->mark_store_credit_receipt_rows( $data, $order, 'live' );
+
+		$this->assertTrue( $filtered['discounts'][0]['gift_card'] );
+		$this->assertStringContainsString( 'Gift card', $filtered['discounts'][0]['label'] );
+		$this->assertStringContainsString( 'Store credit balance:', $filtered['discounts'][0]['label'] );
+		$this->assertStringContainsString( '65', $filtered['discounts'][0]['label'] );
+		$this->assertSame( $data['discounts'][1], $filtered['discounts'][1] );
+	}
+
+	/**
+	 * Online orders are not POS receipts; the payload passes through untouched.
+	 */
+	public function test_receipt_data_filter_leaves_non_pos_orders_alone(): void {
+		$this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
+		$order = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
+		$order->set_created_via( 'checkout' );
+		$order->update_meta_data( 'smart_coupons_contribution', array( 'store100' => 35.0 ) );
+		$order->save();
+
+		$data = array(
+			'discounts' => array(
+				array(
+					'label'         => 'Gift card',
+					'code'          => 'store100',
+					'discount_type' => 'smart_coupon',
+					'total'         => 35.0,
+				),
+			),
+		);
+
+		$this->assertSame( $data, Plugin::instance()->mark_store_credit_receipt_rows( $data, $order, 'live' ) );
+	}
+
+	/**
+	 * The filter and the description hook produce the same label, so WCPOS 1.10.8+ receipts do not print the balance twice.
+	 */
+	public function test_receipt_data_filter_does_not_duplicate_balance_already_in_description(): void {
+		$coupon = $this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
+		$order  = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
+
+		Plugin::instance()->capture_pos_order_contribution( true, $order );
+		$order->save();
+
+		$coupon->set_amount( '65' );
+		$coupon->save();
+
+		$data = array(
+			'discounts' => array(
+				array(
+					'label' => 'Gift card',
+					'code'  => 'store100',
+				),
+			),
+		);
+
+		Plugin::instance()->set_receipt_order_context( $order->get_id(), $order );
+		try {
+			$filtered = Plugin::instance()->mark_store_credit_receipt_rows( $data, $order, 'live' );
+		} finally {
+			Plugin::instance()->clear_receipt_order_context();
+		}
+
+		$this->assertSame( 1, substr_count( $filtered['discounts'][0]['label'], 'Store credit balance:' ) );
+	}
+
+	/**
+	 * End to end through WCPOS's own receipt builder: the row comes out flagged and relabelled.
+	 */
+	public function test_wcpos_receipt_builder_emits_flagged_store_credit_row(): void {
+		if ( ! class_exists( '\WCPOS\WooCommercePOS\Services\Receipt_Data_Builder' ) ) {
+			$this->markTestSkipped( 'WCPOS receipt builder not available.' );
+		}
+
+		$coupon = $this->create_store_credit_coupon( 'STORE100', '100', '', 'Gift card' );
+		$order  = $this->create_pos_order_with_coupon( 'STORE100', '35', '0' );
+		$this->add_product_line( $order, '50', '15' );
+		$order->set_discount_total( '35' );
+		$order->set_total( '15' );
+
+		Plugin::instance()->capture_pos_order_contribution( true, $order );
+		$order->save();
+
+		$coupon->set_amount( '65' );
+		$coupon->save();
+
+		$payload = ( new \WCPOS\WooCommercePOS\Services\Receipt_Data_Builder() )->build( $order, 'live' );
+
+		if ( ! array_key_exists( 'discount_type', $payload['discounts'][0] ) ) {
+			$this->markTestSkipped( 'WCPOS receipt builder predates the woocommerce_pos_receipt_data filter.' );
+		}
+
+		$row = $payload['discounts'][0];
+		$this->assertSame( 'store100', $row['code'] );
+		$this->assertSame( 'smart_coupon', $row['discount_type'] );
+		$this->assertTrue( $row['gift_card'] );
+		$this->assertStringContainsString( 'Gift card', $row['label'] );
+		$this->assertStringContainsString( 'Store credit balance:', $row['label'] );
+		$this->assertStringContainsString( '65', $row['label'] );
+		$this->assertSame( 1, substr_count( $row['label'], 'Store credit balance:' ) );
+	}
 }

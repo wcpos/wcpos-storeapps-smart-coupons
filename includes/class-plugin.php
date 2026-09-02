@@ -67,6 +67,7 @@ class Plugin {
 		add_filter( 'rest_request_before_callbacks', array( $this, 'set_rest_receipt_order_context' ), 10, 3 );
 		add_filter( 'rest_request_after_callbacks', array( $this, 'clear_rest_receipt_order_context' ), 10, 3 );
 		add_filter( 'woocommerce_coupon_get_description', array( $this, 'append_store_credit_receipt_label' ), 10, 2 );
+		add_filter( 'woocommerce_pos_receipt_data', array( $this, 'mark_store_credit_receipt_rows' ), 10, 3 );
 	}
 
 	/**
@@ -715,27 +716,95 @@ class Plugin {
 			return (string) $description;
 		}
 
-		if ( ! $this->is_pos_order( $this->receipt_order ) || ! $this->is_storeapps_available() || ! $this->is_store_credit_coupon( $coupon ) ) {
+		$balance_label = $this->get_store_credit_balance_label( $this->receipt_order, $coupon );
+		if ( null === $balance_label ) {
 			return (string) $description;
 		}
 
-		$contribution = $this->receipt_order->get_meta( 'smart_coupons_contribution', true );
+		return $this->compose_store_credit_label( (string) $description, $balance_label );
+	}
+
+	/**
+	 * Mark store-credit rows in the WCPOS receipt payload.
+	 *
+	 * WCPOS >= 1.10.8 filters its canonical receipt data through
+	 * `woocommerce_pos_receipt_data` for every receipt it builds. For POS orders
+	 * paid with StoreApps store credit this adds `gift_card => true` to the
+	 * matching `discounts[]` row and puts the balance text on the row label, so a
+	 * template can print "Gift Card" instead of "Discount" without any
+	 * StoreApps-specific field in WCPOS itself.
+	 *
+	 * @param array    $data  Receipt data.
+	 * @param WC_Order $order Order the receipt is for.
+	 * @param string   $mode  Receipt mode.
+	 * @return array
+	 */
+	public function mark_store_credit_receipt_rows( $data, $order, $mode ) {
+		unset( $mode );
+
+		if ( ! is_array( $data ) || ! $order instanceof WC_Order || empty( $data['discounts'] ) || ! is_array( $data['discounts'] ) ) {
+			return $data;
+		}
+
+		foreach ( $data['discounts'] as $index => $row ) {
+			if ( ! is_array( $row ) || empty( $row['code'] ) ) {
+				continue;
+			}
+
+			$coupon = new WC_Coupon( (string) $row['code'] );
+			if ( ! $coupon->get_id() ) {
+				continue;
+			}
+
+			$balance_label = $this->get_store_credit_balance_label( $order, $coupon );
+			if ( null === $balance_label ) {
+				continue;
+			}
+
+			$data['discounts'][ $index ]['gift_card'] = true;
+			$data['discounts'][ $index ]['label']     = $this->compose_store_credit_label( $coupon->get_description(), $balance_label );
+		}
+
+		return $data;
+	}
+
+	/**
+	 * Build the "Store credit balance" text for a store-credit coupon used on a POS order.
+	 *
+	 * @param WC_Order  $order  Order the receipt is for.
+	 * @param WC_Coupon $coupon Coupon behind a discount row.
+	 * @return string|null Null when the coupon is not store credit recorded against this POS order.
+	 */
+	private function get_store_credit_balance_label( WC_Order $order, WC_Coupon $coupon ): ?string {
+		if ( ! $this->is_pos_order( $order ) || ! $this->is_storeapps_available() || ! $this->is_store_credit_coupon( $coupon ) ) {
+			return null;
+		}
+
+		$contribution = $order->get_meta( 'smart_coupons_contribution', true );
 		if ( empty( $contribution ) || ! is_array( $contribution ) ) {
-			return (string) $description;
+			return null;
 		}
 
-		$code = wc_format_coupon_code( $coupon->get_code() );
-		if ( ! array_key_exists( $code, $contribution ) ) {
-			return (string) $description;
+		if ( ! array_key_exists( wc_format_coupon_code( $coupon->get_code() ), $contribution ) ) {
+			return null;
 		}
 
-		$balance_label = sprintf(
+		return sprintf(
 			/* translators: %s: current store-credit balance */
 			__( 'Store credit balance: %s', 'wcpos-storeapps-smart-coupons' ),
-			$this->format_order_price_plain( $this->receipt_order, (float) $coupon->get_amount() )
+			$this->format_order_price_plain( $order, (float) $coupon->get_amount() )
 		);
+	}
 
-		$description = trim( wp_strip_all_tags( (string) $description ) );
+	/**
+	 * Append the balance text to a coupon description, once.
+	 *
+	 * @param string $description   Coupon description, possibly already carrying the balance text.
+	 * @param string $balance_label Balance text.
+	 * @return string
+	 */
+	private function compose_store_credit_label( string $description, string $balance_label ): string {
+		$description = trim( wp_strip_all_tags( $description ) );
 		if ( '' !== $description && false !== strpos( $description, $balance_label ) ) {
 			return $description;
 		}
